@@ -304,11 +304,12 @@ func (f *Filter) Match(key [KeySize]byte, data []byte) (bool, error) {
 	term = fastReduction(term, nphi, nplo)
 
 	// Go through the search filter and look for the desired value.
-	var value uint64
-	for i := uint32(0); i < f.N(); i++ {
+	var lastValue uint64
+	for lastValue < term {
+
 		// Read the difference between previous and new value from
 		// bitstream.
-		delta, err := f.readFullUint64(b)
+		value, err := f.readFullUint64(b)
 		if err != nil {
 			if err == io.EOF {
 				return false, nil
@@ -316,25 +317,15 @@ func (f *Filter) Match(key [KeySize]byte, data []byte) (bool, error) {
 			return false, err
 		}
 
-		// Add the delta to the previous value.
-		value += delta
-		switch {
-
-		// The current value matches our query term, success.
-		case value == term:
+		// Add the previous value to it.
+		value += lastValue
+		if value == term {
 			return true, nil
-
-		// The current value is greater than our query term, thus no
-		// future decoded value can match because the values
-		// monotonically increase.
-		case value > term:
-			return false, nil
 		}
+
+		lastValue = value
 	}
 
-	// All values were decoded and none produced a successful match. This
-	// indicates that the items in the filter were all smaller than our
-	// target.
 	return false, nil
 }
 
@@ -391,55 +382,42 @@ func (f *Filter) ZipMatchAny(key [KeySize]byte, data [][]byte) (bool, error) {
 	}
 	sort.Sort(values)
 
-	querySize := len(values)
-
 	// Zip down the filters, comparing values until we either run out of
 	// values to compare in one of the filters or we reach a matching
 	// value.
-	var (
-		value      uint64
-		queryIndex int
-	)
-out:
-	for i := uint32(0); i < f.N(); i++ {
-		// Advance filter we're searching or return false if we're at
-		// the end because nothing matched.
-		delta, err := f.readFullUint64(b)
-		if err != nil {
-			if err == io.EOF {
+	var lastValue1, lastValue2 uint64
+	lastValue2 = values[0]
+	i := 1
+	for lastValue1 != lastValue2 {
+		// Check which filter to advance to make sure we're comparing
+		// the right values.
+		switch {
+		case lastValue1 > lastValue2:
+			// Advance filter created from search terms or return
+			// false if we're at the end because nothing matched.
+			if i < len(values) {
+				lastValue2 = values[i]
+				i++
+			} else {
 				return false, nil
 			}
-			return false, err
-		}
-		value += delta
-
-		for {
-			switch {
-
-			// All query items have been exhausted and we haven't
-			// had a match, therefore there are no matches.
-			case queryIndex == querySize:
-				return false, nil
-
-			// The current item in the query matches the decoded
-			// value, success.
-			case values[queryIndex] == value:
-				return true, nil
-
-			// The current item in the query is greater than the
-			// current decoded value, continue to decode the next
-			// delta and try again.
-			case values[queryIndex] > value:
-				continue out
+		case lastValue2 > lastValue1:
+			// Advance filter we're searching or return false if
+			// we're at the end because nothing matched.
+			value, err := f.readFullUint64(b)
+			if err != nil {
+				if err == io.EOF {
+					return false, nil
+				}
+				return false, err
 			}
-
-			queryIndex++
+			lastValue1 += value
 		}
 	}
 
-	// All items in the filter were decoded and none produced a successful
-	// match.
-	return false, nil
+	// If we've made it this far, an element matched between filters so we
+	// return true.
+	return true, nil
 }
 
 // HashMatchAny returns checks whether any []byte value is likely (within
