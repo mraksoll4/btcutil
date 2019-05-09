@@ -393,6 +393,8 @@ func (f *Filter) ZipMatchAny(key [KeySize]byte, data [][]byte) (bool, error) {
 
 	querySize := len(values)
 
+	querySize := len(values)
+
 	// Zip down the filters, comparing values until we either run out of
 	// values to compare in one of the filters or we reach a matching
 	// value.
